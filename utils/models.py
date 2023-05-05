@@ -4,6 +4,8 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from torchvision.models.resnet import resnet34
+from utils.sparse.resnet import resnet34 as sparse_resnet34
+import spconv.pytorch as spconv
 import tqdm
 
 
@@ -79,7 +81,7 @@ class ValueLayer(nn.Module):
         return gt_values
 
 
-class QuantizationLayer(nn.Module):
+class QuantizationLayerEST(nn.Module):
     def __init__(self, dim,
                  mlp_layers=[1, 100, 100, 1],
                  activation=nn.LeakyReLU(negative_slope=0.1)):
@@ -124,6 +126,45 @@ class QuantizationLayer(nn.Module):
         return vox
 
 
+class QuantizationLayerVoxGrid(nn.Module):
+    def __init__(self, dim):
+        nn.Module.__init__(self)
+        self.dim = dim
+
+    def forward(self, events):
+        epsilon = 10e-3
+        B = int(1+events[-1,-1].item())
+        if B < 1:
+            B = 1
+        num_voxels = int(np.prod(self.dim) * B)
+        vox_grid = events[0].new_full([num_voxels, ], fill_value=0)
+        C, H, W = self.dim
+
+        # get values for each channel
+        x, y, t, p, b = events.t()
+
+        # normalizing timestamps
+        t = t / t.max()
+
+        p = (p + 1) / 2  # maps polarity to 0, 1
+
+        for i_bin in range(C):
+            index = (t > i_bin / C) & (t <= (i_bin + 1) / C)
+            x1 = x[index]
+            y1 = y[index]
+            b1 = b[index]
+
+            idx = x1 + W * y1 + W * H * i_bin + W * H * C * b1
+            val = torch.zeros_like(x1) + 1
+            vox_grid.put_(idx.long(), val, accumulate=True)
+
+        # normalize
+        #   vox_grid = vox_grid / (vox_grid.max() + epsilon)
+        #   vox_grid[vox_grid > 0] = 1
+        vox_grid = vox_grid.view(-1, C, H, W)
+        return vox_grid
+
+
 class Classifier(nn.Module):
     def __init__(self,
                  voxel_dimension=(9,180,240),  # dimension of voxel will be C x 2 x H x W
@@ -131,18 +172,26 @@ class Classifier(nn.Module):
                  num_classes=101,
                  mlp_layers=[1, 30, 30, 1],
                  activation=nn.LeakyReLU(negative_slope=0.1),
-                 pretrained=True):
+                 pretrained=True,
+                 sparse=True):
 
         nn.Module.__init__(self)
-        self.quantization_layer = QuantizationLayer(voxel_dimension, mlp_layers, activation)
-        self.classifier = resnet34(pretrained=pretrained)
-
+        # self.quantization_layer = QuantizationLayerEST(voxel_dimension, mlp_layers=mlp_layers, activation=activation)
+        self.quantization_layer = QuantizationLayerVoxGrid(voxel_dimension)
         self.crop_dimension = crop_dimension
 
-        # replace fc layer and first convolutional layer
-        input_channels = 2*voxel_dimension[0]
-        self.classifier.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.classifier.fc = nn.Linear(self.classifier.fc.in_features, num_classes)
+        if sparse:
+            self.classifier = sparse_resnet34(pretrained=pretrained)
+            # replace fc layer and first convolutional layer
+            input_channels = voxel_dimension[0]
+            self.classifier.conv1 = spconv.SparseConv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+            self.classifier.fc = nn.Linear(self.classifier.fc.in_features, num_classes)
+        else:
+            self.classifier = resnet34(pretrained=pretrained)
+            # replace fc layer and first convolutional layer
+            input_channels = 2*voxel_dimension[0]
+            self.classifier.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+            self.classifier.fc = nn.Linear(self.classifier.fc.in_features, num_classes)
 
     def crop_and_resize_to_resolution(self, x, output_resolution=(224, 224)):
         B, C, H, W = x.shape

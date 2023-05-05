@@ -23,7 +23,7 @@ def random_flip_events_along_x(events, resolution=(180, 240), p=0.5):
 
 class NCaltech101:
     def __init__(self, root, augmentation=False):
-        self.classes = listdir(root)
+        self.classes = sorted(listdir(root))
 
         self.files = []
         self.labels = []
