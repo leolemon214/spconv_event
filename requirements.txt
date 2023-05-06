@@ -1,4 +1,5 @@
-torch<2
-torchvision<1
+torch==1.13.1+cu117
+torchvision==0.14.1+cu117
+spconv-cu117==2.3.6
 tqdm
 tensorboard

@@ -1,37 +1,9 @@
-# Event Representation Learning
-
-[![Event Representation Learning](resources/youtube_preview.png)](https://youtu.be/bQtSx59GXRY)
-
-This repository contains learning code that implements 
-event representation learning as described in Gehrig et al. ICCV'19. The paper can be found [here](http://rpg.ifi.uzh.ch/docs/ICCV19_Gehrig.pdf)
-
-If you use this code in an academic context, please cite the following work:
-
-[Daniel Gehrig](https://danielgehrig18.github.io/), [Antonio Loquercio](https://antonilo.github.io/), Konstantinos G. Derpanis, Davide Scaramuzza, "End-to-End Learning of Representations 
-for Asynchronous Event-Based Data", The International Conference on Computer Vision (ICCV), 2019
-
-```bibtex
-@InProceedings{Gehrig_2019_ICCV,
-  author = {Daniel Gehrig and Antonio Loquercio and Konstantinos G. Derpanis and Davide Scaramuzza},
-  title = {End-to-End Learning of Representations for Asynchronous Event-Based Data},
-  booktitle = {Int. Conf. Comput. Vis. (ICCV)},
-  month = {October},
-  year = {2019}
-}
-```
-
 ## Requirements
 
-* Python 3.7
-* virtualenv
-* cuda 10
+* Python 3.10
+* cuda 11.7
 
 ## Dependencies
-Create a virtual environment with `python3.7` and activate it
-
-    virtualenv venv -p /usr/local/bin/python3.7
-    source venv/bin/activate
-
 Install all dependencies by calling 
 
     pip install -r requirements.txt
@@ -44,7 +16,7 @@ Before training, download the `N-Caltech101` dataset and unzip it
     
 Then start training by calling
 
-    python main.py --validation_dataset N-Caltech101/validation/ --training_dataset N-Caltech101/training/ --log_dir log/temp --device cuda:0
+    python main.py --validation_dataset N-Caltech101/validation/ --training_dataset N-Caltech101/training/ --log_dir log/temp --device cuda:0 --sparse
 
 Here, `validation_dataset` and `training_dataset` should point to the folders where the training and validation set are stored.
 `log_dir` controls logging and `device` controls on which device you want to train. Checkpoints and models with lowest validation loss will be saved in the root folder of `log_dir`.
