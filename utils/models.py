@@ -187,7 +187,7 @@ class Classifier(nn.Module):
             self.classifier.conv1 = spconv.SparseConv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
             self.classifier.fc = nn.Linear(self.classifier.fc.in_features, num_classes)
         else:
-            self.classifier = resnet34(pretrained=pretrained)
+            self.classifier = resnet34(pretrained=False)
             # replace fc layer and first convolutional layer
             input_channels = voxel_dimension[0]
             self.classifier.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
