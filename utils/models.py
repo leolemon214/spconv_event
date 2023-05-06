@@ -172,7 +172,7 @@ class Classifier(nn.Module):
                  num_classes=101,
                  mlp_layers=[1, 30, 30, 1],
                  activation=nn.LeakyReLU(negative_slope=0.1),
-                 pretrained=True,
+                 pretrained=False,
                  sparse=True):
 
         nn.Module.__init__(self)
@@ -181,7 +181,7 @@ class Classifier(nn.Module):
         self.crop_dimension = crop_dimension
 
         if sparse:
-            self.classifier = sparse_resnet34(pretrained=pretrained)
+            self.classifier = sparse_resnet34(pretrained=False)
             # replace fc layer and first convolutional layer
             input_channels = voxel_dimension[0]
             self.classifier.conv1 = spconv.SparseConv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
@@ -189,7 +189,7 @@ class Classifier(nn.Module):
         else:
             self.classifier = resnet34(pretrained=pretrained)
             # replace fc layer and first convolutional layer
-            input_channels = 2*voxel_dimension[0]
+            input_channels = voxel_dimension[0]
             self.classifier.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
             self.classifier.fc = nn.Linear(self.classifier.fc.in_features, num_classes)
 

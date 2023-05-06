@@ -5,12 +5,16 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 import spconv.pytorch as spconv
+import spconv.constants as spconv_constants
 
 from torchvision.transforms._presets import ImageClassification
 from torchvision.utils import _log_api_usage_once
-from torchvision.models._api import register_model, Weights, WeightsEnum
+from torchvision.models._api import Weights, WeightsEnum
 from torchvision.models._meta import _IMAGENET_CATEGORIES
 from torchvision.models._utils import _ovewrite_named_param, handle_legacy_interface
+
+spconv_constants.SPCONV_ALLOW_TF32 = True
+CONV_ALGO = None
 
 __all__ = [
     "ResNet",
@@ -38,7 +42,7 @@ __all__ = [
 
 
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1,
-            dilation: int = 1) -> spconv.SubMConv2d | spconv.SparseConv2d:
+            dilation: int = 1, indice_key: str = None) -> spconv.SubMConv2d | spconv.SparseConv2d:
     """3x3 convolution with padding"""
     Conv2d = spconv.SubMConv2d if stride == 1 else spconv.SparseConv2d
     return Conv2d(
@@ -50,13 +54,16 @@ def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1,
         groups=groups,
         bias=False,
         dilation=dilation,
+        indice_key=indice_key,
+        algo=CONV_ALGO
     )
 
 
-def conv1x1(in_planes: int, out_planes: int, stride: int = 1) -> spconv.SubMConv2d | spconv.SparseConv2d:
+def conv1x1(in_planes: int, out_planes: int, stride: int = 1,
+            indice_key: str = None) -> spconv.SubMConv2d | spconv.SparseConv2d:
     """1x1 convolution"""
     Conv2d = spconv.SubMConv2d if stride == 1 else spconv.SparseConv2d
-    return Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+    return Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False, indice_key=indice_key, algo=CONV_ALGO)
 
 
 class BasicBlock(nn.Module):
@@ -72,6 +79,7 @@ class BasicBlock(nn.Module):
             base_width: int = 64,
             dilation: int = 1,
             norm_layer: Optional[Callable[..., nn.Module]] = None,
+            indice_key: str = None
     ) -> None:
         super().__init__()
         if norm_layer is None:
@@ -81,10 +89,10 @@ class BasicBlock(nn.Module):
         if dilation > 1:
             raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
         # Both self.conv1 and self.downsample layers downsample the input when stride != 1
-        self.conv1 = conv3x3(inplanes, planes, stride)
+        self.conv1 = conv3x3(inplanes, planes, stride, indice_key=(indice_key if stride == 1 else None))
         self.bn1 = norm_layer(planes)
-        self.relu = spconv.SparseReLU(inplace=True)
-        self.conv2 = conv3x3(planes, planes)
+        self.relu = spconv.SparseReLU()
+        self.conv2 = conv3x3(planes, planes, indice_key=indice_key)
         self.bn2 = norm_layer(planes)
         self.downsample = downsample
         self.stride = stride
@@ -101,7 +109,8 @@ class BasicBlock(nn.Module):
 
         if self.downsample is not None:
             identity = self.downsample(x)
-        out = spconv.functional.sparse_add(out, identity)
+        out = out + identity
+
         out = self.relu(out)
 
         return out
@@ -126,19 +135,20 @@ class Bottleneck(nn.Module):
             base_width: int = 64,
             dilation: int = 1,
             norm_layer: Optional[Callable[..., nn.Module]] = None,
+            indice_key: str = None
     ) -> None:
         super().__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         width = int(planes * (base_width / 64.0)) * groups
         # Both self.conv2 and self.downsample layers downsample the input when stride != 1
-        self.conv1 = conv1x1(inplanes, width)
+        self.conv1 = conv1x1(inplanes, width, indice_key=indice_key)
         self.bn1 = norm_layer(width)
-        self.conv2 = conv3x3(width, width, stride, groups, dilation)
+        self.conv2 = conv3x3(width, width, stride, groups, dilation, indice_key=(indice_key if stride == 1 else None))
         self.bn2 = norm_layer(width)
-        self.conv3 = conv1x1(width, planes * self.expansion)
+        self.conv3 = conv1x1(width, planes * self.expansion, indice_key=indice_key)
         self.bn3 = norm_layer(planes * self.expansion)
-        self.relu = spconv.SparseReLU(inplace=True)
+        self.relu = spconv.SparseReLU()
         self.downsample = downsample
         self.stride = stride
 
@@ -158,9 +168,8 @@ class Bottleneck(nn.Module):
 
         if self.downsample is not None:
             identity = self.downsample(x)
-            out = spconv.functional.sparse_add(out, identity)
-        else:
-            out = out + identity
+        out = out + identity
+
         out = self.relu(out)
 
         return out
@@ -197,14 +206,14 @@ class ResNet(nn.Module):
             )
         self.groups = groups
         self.base_width = width_per_group
-        self.conv1 = spconv.SparseConv2d(3, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False)
+        self.conv1 = spconv.SparseConv2d(3, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False, algo=CONV_ALGO)
         self.bn1 = norm_layer(self.inplanes)
-        self.relu = spconv.SparseReLU(inplace=True)
+        self.relu = spconv.SparseReLU()
         self.maxpool = spconv.SparseMaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0])
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1])
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2])
+        self.layer1 = self._make_layer(block, 64, layers[0], indice_key="subm1")
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], indice_key="subm2")
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], indice_key="subm3")
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], indice_key="subm4")
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512 * block.expansion, num_classes)
 
@@ -232,6 +241,7 @@ class ResNet(nn.Module):
             blocks: int,
             stride: int = 1,
             dilate: bool = False,
+            indice_key: str = None
     ) -> nn.Sequential:
         norm_layer = self._norm_layer
         downsample = None
@@ -240,15 +250,20 @@ class ResNet(nn.Module):
             self.dilation *= stride
             stride = 1
         if stride != 1 or self.inplanes != planes * block.expansion:
+            # downsample = nn.Sequential(
+            #     conv1x1(self.inplanes, planes * block.expansion, stride),
+            #     norm_layer(planes * block.expansion),
+            # )
             downsample = nn.Sequential(
-                conv1x1(self.inplanes, planes * block.expansion, stride),
-                norm_layer(planes * block.expansion),
+                conv3x3(self.inplanes, planes * block.expansion, stride),
+                norm_layer(planes * block.expansion)
             )
 
         layers = []
         layers.append(
             block(
-                self.inplanes, planes, stride, downsample, self.groups, self.base_width, previous_dilation, norm_layer
+                self.inplanes, planes, stride, downsample, self.groups, self.base_width, previous_dilation, norm_layer,
+                indice_key
             )
         )
         self.inplanes = planes * block.expansion
@@ -261,6 +276,7 @@ class ResNet(nn.Module):
                     base_width=self.base_width,
                     dilation=self.dilation,
                     norm_layer=norm_layer,
+                    indice_key=indice_key
                 )
             )
 
@@ -305,12 +321,7 @@ def _resnet(
     model = ResNet(block, layers, **kwargs)
 
     if weights is not None:
-        state_dict = {}
-        for k, v in weights.get_state_dict(progress=progress).items():
-            if k.endswith('weight') and v.ndim == 4:
-                v = v.permute(0, 2, 3, 1).contiguous()
-            state_dict[k] = v
-        model.load_state_dict(state_dict)
+        model.load_state_dict(weights.get_state_dict(progress=progress))
 
     return model
 

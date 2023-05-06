@@ -36,6 +36,8 @@ def FLAGS():
     parser.add_argument("--num_epochs", type=int, default=30)
     parser.add_argument("--save_every_n_epochs", type=int, default=5)
 
+    parser.add_argument("--sparse", action="store_true")
+
     flags = parser.parse_args()
 
     assert os.path.isdir(dirname(flags.log_dir)), f"Log directory root {dirname(flags.log_dir)} not found."
@@ -89,7 +91,7 @@ if __name__ == '__main__':
     validation_loader = Loader(validation_dataset, flags, device=flags.device)
 
     # model, and put to device
-    model = Classifier()
+    model = Classifier(sparse=flags.sparse)
     model = model.to(flags.device)
 
     # optimizer and lr scheduler
